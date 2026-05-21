@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <title>Physics Builder Prototype</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+        
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a1a;
+            font-family: 'VT323', monospace;
+            color: white;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* --- SIDEBAR --- */
+        #sidebar {
+            width: 280px;
+            background: #c6c6c6;
+            border-right: 4px solid #000;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            color: #333;
+            box-shadow: 5px 0 15px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        h2 { margin: 0 0 10px 0; text-align: center; color: #404040; text-shadow: 1px 1px 0 #fff; }
+        
+        .section {
+            background: #8b8b8b;
+            padding: 10px;
+            border: 3px solid #373737;
+            border-top-color: #fff;
+            border-left-color: #fff;
+        }
+
+        .btn-group { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+        
+        button {
+            font-family: 'VT323', monospace;
+            font-size: 20px;
+            padding: 10px;
+            cursor: pointer;
+            background: #7a7a7a;
+            color: white;
+            border: 2px solid #000;
+            border-top-color: #aaa;
+            border-left-color: #aaa;
+            transition: 0.1s;
+        }
+        button:hover { background: #8a8a8a; }
+        button:active { border-top-color: #000; border-left-color: #000; border-bottom-color: #aaa; border-right-color: #aaa; }
+        
+        button.active {
+            background: #4CAF50;
+            border-color: #2E7D32;
+            color: white;
+            box-shadow: inset 2px 2px 5px rgba(0,0,0,0.5);
+        }
+
+        .controls { display: flex; flex-direction: column; gap: 10px; }
+        
+        .control-btn {
+            background: #2196F3;
+            border-color: #0D47A1;
+        }
+        .control-btn.danger { background: #f44336; border-color: #b71c1c; }
+
+        #info {
+            font-size: 18px;
+            text-align: center;
+            color: #555;
+            margin-top: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- UI PANEL -->
+    <div id="sidebar">
+        <h2>️ Інструменти</h2>
+
+        <!-- MATERIALS -->
+        <div class="section">
+            <h3>📦 Матеріал</h3>
+            <div class="btn-group" id="material-buttons">
+                <button class="active" onclick="setMaterial('wood', this)">🪵 Дерево (45)</button>
+                <button onclick="setMaterial('brick', this)">🧱 Цегла (115)</button>
+                <button onclick="setMaterial('metal', this)">️ Метал (200)</button>
+                <button onclick="setMaterial('glass', this)">🪟 Скло (25)</button>
+            </div>
+        </div>
+
+        <!-- SHAPES -->
+        <div class="section">
+            <h3>📐 Форма</h3>
+            <div class="btn-group" id="shape-buttons">
+                <button class="active" onclick="setShape('square', this)"> Квадрат</button>
+                <button onclick="setShape('triangle', this)">🔺 Трикутник</button>
+                <button onclick="setShape('rectangle', this)">▬ Прямокутник</button>
+                <button onclick="setShape('circle', this)">🔵 Коло</button>
+                <button onclick="setShape('hexagon', this)">⬡ Шестикутник</button>
+            </div>
+        </div>
+
+        <!-- CONTROLS -->
+        <div class="controls">
+            <button class="control-btn" id="toggleGravity" onclick="toggleGravity()">▶️ Запустити Симуляцію</button>
+            <button class="control-btn danger" onclick="clearWorld()">🗑️ Очистити Все</button>
+        </div>
+
+        <div id="info">Клікай на поле, щоб будувати!</div>
+    </div>
+
+    <!-- GAME AREA -->
+    <div id="game-area"></div>
+
+    <!-- MATTER.JS LIBRARY -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+
+    <script>
+        // --- GAME CONFIG ---
+        const Materials = {
+            wood:   { hp: 45,  color: '#8B5A2B', density: 0.002 },
+            brick:  { hp: 115, color: '#CD5C5C', density: 0.005 },
+            metal:  { hp: 200, color: '#708090', density: 0.010 },
+            glass:  { hp: 25,  color: 'rgba(173, 216, 230, 0.6)', density: 0.001 }
+        };
+
+        const Shapes = {
+            square:   { type: 'static', hpMult: 1.0,  dmgMult: 0,   frictionLoss: 0 },
+            rectangle:{ type: 'static', hpMult: 0.5,  dmgMult: 0,   frictionLoss: 0, heightRatio: 0.5 },
+            triangle: { type: 'static', hpMult: 0.6,  dmgMult: 0.5, frictionLoss: 0 }, // Шипи: 50% damage
+            circle:   { type: 'dynamic',hpMult: 0.75, dmgMult: 0.4, frictionLoss: 0.4 }, // Каток: 40% dmg, 40% slow
+            hexagon:  { type: 'dynamic',hpMult: 0.9,  dmgMult: 0.5, frictionLoss: 0.5 }  // Броньокаток: 50% dmg, 50% slow
+        };
+
+        let selectedMaterial = 'wood';
+        let selectedShape = 'square';
+        let isGravityOn = false;
+
+        // --- MATTER.JS SETUP ---
+        const { Engine, Render, Runner, World, Bodies, Mouse, MouseConstraint, Events, Vector, Body, Composite } = Matter;
+
+        const engine = Engine.create();
+        const world = engine.world;
+        
+        // Вимикаємо гравітацію спочатку
+        engine.gravity.y = 0;
+
+        const render = Render.create({
+            element: document.getElementById('game-area'),
+            engine: engine,
+            options: {
+                width: window.innerWidth - 280,
+                height: window.innerHeight,
+                wireframes: false,
+                background: '#222'
+            }
+        });
+
+        Render.run(render);
+        const runner = Runner.create();
+        Runner.run(runner, engine);
+
+        // --- BOUNDARIES ---
+        const wallThickness = 60;
+        const width = window.innerWidth - 280;
+        const height = window.innerHeight;
+
+        const ground = Bodies.rectangle(width/2, height + 30, width, wallThickness, { isStatic: true, render: { fillStyle: '#333' } });
+        const leftWall = Bodies.rectangle(-30, height/2, wallThickness, height, { isStatic: true });
+        const rightWall = Bodies.rectangle(width + 30, height/2, wallThickness, height, { isStatic: true });
+        World.add(world, [ground, leftWall, rightWall]);
+
+        // --- MOUSE INTERACTION ---
+        const mouse = Mouse.create(render.canvas);
+        const mouseConstraint = MouseConstraint.create(engine, {
+            mouse: mouse,
+            constraint: { stiffness: 0.2, render: { visible: false } }
+        });
+        World.add(world, mouseConstraint);
+        render.mouse = mouse;
+
+        // --- CLICK TO BUILD ---
+        render.canvas.addEventListener('mousedown', (e) => {
+            // Don't build if clicking on existing body
+            const bodiesUnderCursor = Matter.Query.point(Composite.allBodies(world), { x: e.offsetX, y: e.offsetY });
+            if (bodiesUnderCursor.length > 0) return; 
+
+            spawnBlock(e.offsetX, e.offsetY);
+        });
+
+        // --- SPAWN LOGIC ---
+        function spawnBlock(x, y) {
+            const mat = Materials[selectedMaterial];
+            const shapeCfg = Shapes[selectedShape];
+            
+            // Розрахунок HP
+            const maxHp = mat.hp * shapeCfg.hpMult;
+
+            let body;
+            const size = 50; // Базовий розмір
+
+            const commonOptions = {
+                restitution: 0.2, // Пружність
+                friction: 0.8,    // Тертя
+                density: mat.density,
+                render: { fillStyle: mat.color, strokeStyle: '#000', lineWidth: 2 },
+                // Кастомні властивості для гри
+                plugin: {
+                    gameData: {
+                        hp: maxHp,
+                        maxHp: maxHp,
+                        dmgMult: shapeCfg.dmgMult,
+                        frictionLoss: shapeCfg.frictionLoss,
+                        type: shapeCfg.type, // 'static' or 'dynamic'
+                        isWeapon: shapeCfg.dmgMult > 0
+                    }
+                }
+            };
+
+            // Створення тіла залежно від форми
+            if (selectedShape === 'square') {
+                body = Bodies.rectangle(x, y, size, size, { ...commonOptions, isStatic: true });
+            } 
+            else if (selectedShape === 'rectangle') {
+                // Прямокутник - половина висоти
+                body = Bodies.rectangle(x, y, size, size * 0.5, { ...commonOptions, isStatic: true });
+            }
+            else if (selectedShape === 'triangle') {
+                // Трикутник - статичний
+                body = Bodies.polygon(x, y, 3, size / 1.5, { ...commonOptions, isStatic: true });
+            }
+            else if (selectedShape === 'circle') {
+                // Коло - фізичне
+                body = Bodies.circle(x, y, size / 2, { ...commonOptions, isStatic: false });
+            }
+            else if (selectedShape === 'hexagon') {
+                // Шестикутник - фізичне
+                body = Bodies.polygon(x, y, 6, size / 2, { ...commonOptions, isStatic: false });
+            }
+
+            if (body) {
+                World.add(world, body);
+            }
+        }
+
+        // --- DAMAGE & PHYSICS LOGIC ---
+        Events.on(engine, 'collisionStart', (event) => {
+            event.pairs.forEach((pair) => {
+                const bodyA = pair.bodyA;
+                const bodyB = pair.bodyB;
+
+                // Перевірка, чи є у тіл наші кастомні дані
+                if (!bodyA.plugin?.gameData || !bodyB.plugin?.gameData) return;
+
+                const dataA = bodyA.plugin.gameData;
+                const dataB = bodyB.plugin.gameData;
+
+                // 1. Розрахунок сили удару (відносна швидкість)
+                // Беремо модуль різниці швидкостей
+                const speedA = Vector.magnitude(bodyA.velocity);
+                const speedB = Vector.magnitude(bodyB.velocity);
+                const impactSpeed = Math.abs(speedA - speedB) + Math.max(speedA, speedB); 
+                // Спрощена формула: якщо одне стоїть, беремо швидкість іншого. Якщо обидва рухаються - сумуємо вплив.
+                const realImpact = Math.max(speedA, speedB); 
+
+                if (realImpact < 1) return; // Ігноруємо мікрозіткнення
+
+                // 2. Застосування шкоди
+                // Якщо A - зброя, б'є B
+                if (dataA.isWeapon) {
+                    const damage = realImpact * dataA.dmgMult;
+                    applyDamage(bodyB, damage);
+                }
+                // Якщо B - зброя, б'є A
+                if (dataB.isWeapon) {
+                    const damage = realImpact * dataB.dmgMult;
+                    applyDamage(bodyA, damage);
+                }
+
+                // 3. Ефект гальмування для Катків (Коло/Шестикутник)
+                // Якщо тіло динамічне і має коефіцієнт втрати швидкості
+                if (dataA.type === 'dynamic' && dataA.frictionLoss > 0 && dataA.isWeapon) {
+                    Body.setVelocity(bodyA, {
+                        x: bodyA.velocity.x * (1 - dataA.frictionLoss),
+                        y: bodyA.velocity.y * (1 - dataA.frictionLoss)
+                    });
+                }
+                if (dataB.type === 'dynamic' && dataB.frictionLoss > 0 && dataB.isWeapon) {
+                    Body.setVelocity(bodyB, {
+                        x: bodyB.velocity.x * (1 - dataB.frictionLoss),
+                        y: bodyB.velocity.y * (1 - dataB.frictionLoss)
+                    });
+                }
+            });
+        });
+
+        function applyDamage(body, amount) {
+            const data = body.plugin.gameData;
+            if (data.hp > 0) {
+                data.hp -= amount;
+                
+                // Візуальний ефект (прозорість)
+                const opacity = Math.max(0.2, data.hp / data.maxHp);
+                body.render.opacity = opacity;
+
+                if (data.hp <= 0) {
+                    // Знищення
+                    World.remove(world, body);
+                }
+            }
+        }
+
+        // --- UI FUNCTIONS ---
+        function setMaterial(mat, btn) {
+            selectedMaterial = mat;
+            document.querySelectorAll('#material-buttons button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }
+
+        function setShape(shape, btn) {
+            selectedShape = shape;
+            document.querySelectorAll('#shape-buttons button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }
+
+        function toggleGravity() {
+            isGravityOn = !isGravityOn;
+            const btn = document.getElementById('toggleGravity');
+            
+            if (isGravityOn) {
+                engine.gravity.y = 1; // Вмикаємо гравітацію
+                btn.textContent = "⏸️ Зупинити Симуляцію";
+                btn.style.background = "#f44336";
+            } else {
+                engine.gravity.y = 0; // Вимикаємо
+                // Зупиняємо всі тіла
+                Composite.allBodies(world).forEach(body => {
+                    Body.setVelocity(body, { x: 0, y: 0 });
+                    Body.setAngle(body, 0); // Опціонально: повернути горизонтально
+                });
+                btn.textContent = "▶️ Запустити Симуляцію";
+                btn.style.background = "#2196F3";
+            }
+        }
+
+        function clearWorld() {
+            // Видаляємо все, крім стін
+            const bodies = Composite.allBodies(world);
+            bodies.forEach(body => {
+                if (!body.isStatic || (body.label === "Rectangle Body" && body.position.y > height - 50)) { 
+                    // Груба перевірка, щоб не видалити стіни (у них isStatic: true, але ми створили їх окремо)
+                    // Краще перевіряти по групі або просто видалити все динамічне + статичне що не стіни
+                }
+            });
+            
+            // Простіше: видалити все крім стін
+            // Стіни ми створювали першими, але краще просто очистити світ і додати стіни назад
+            World.clear(world);
+            World.add(world, [ground, leftWall, rightWall, mouseConstraint]);
+        }
+    </script>
+</body>
+</html>
